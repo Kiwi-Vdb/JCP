@@ -9,6 +9,7 @@ function widget:GetInfo()
 		license = "GNU GPL, v2 or later",
 		layer = 9999,
 		enabled = true,
+		handler = true,
 	}
 end
 
@@ -208,6 +209,13 @@ local function restoreChatFilter()
 end
 
 local function installChatFilter()
+	-- BAR normally gives user widgets a restricted widgetHandler. JCP requests
+	-- full handler access above, but keep this guard so a future BAR change
+	-- cannot stop the unit-sharing part of the widget from loading.
+	if not widgetHandler or type(widgetHandler.FindWidget) ~= "function" then
+		return
+	end
+
 	local currentChatWidget = widgetHandler:FindWidget("Chat")
 	if currentChatWidget == chatWidget and filteredChatUnitTaken and currentChatWidget.UnitTaken == filteredChatUnitTaken then
 		return
