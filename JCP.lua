@@ -83,6 +83,8 @@ local suppressedUnitIDs = {}
 local chatWidget
 local originalChatUnitTaken
 local filteredChatUnitTaken
+local originalChatUnitGiven
+local filteredChatUnitGiven
 
 local function drawBox(x1, y1, x2, y2, color)
 	gl.Color(color[1], color[2], color[3], color[4])
@@ -198,14 +200,38 @@ local function currentWhitelist()
 	end
 end
 
+local function incomingWhitelist()
+	if selectedRole == ROLE_MACRO then
+		return microShareWhitelist
+	elseif selectedRole == ROLE_MICRO then
+		return macroShareWhitelist
+	end
+end
+
+local function isExpectedIncomingUnit(unitDefID, oldTeamID, newTeamID)
+	if newTeamID ~= myTeamID or oldTeamID ~= getTeammate() then
+		return false
+	end
+
+	local whitelist = incomingWhitelist()
+	local unitDef = UnitDefs[unitDefID]
+	return whitelist and unitDef and whitelist[unitDef.name] == true
+end
+
 local function restoreChatFilter()
 	if chatWidget and originalChatUnitTaken and chatWidget.UnitTaken == filteredChatUnitTaken then
 		chatWidget.UnitTaken = originalChatUnitTaken
 	end
 
+	if chatWidget and originalChatUnitGiven and chatWidget.UnitGiven == filteredChatUnitGiven then
+		chatWidget.UnitGiven = originalChatUnitGiven
+	end
+
 	chatWidget = nil
 	originalChatUnitTaken = nil
 	filteredChatUnitTaken = nil
+	originalChatUnitGiven = nil
+	filteredChatUnitGiven = nil
 end
 
 local function installChatFilter()
@@ -217,32 +243,54 @@ local function installChatFilter()
 	end
 
 	local currentChatWidget = widgetHandler:FindWidget("Chat")
-	if currentChatWidget == chatWidget and filteredChatUnitTaken and currentChatWidget.UnitTaken == filteredChatUnitTaken then
+	if currentChatWidget == chatWidget
+		and (not filteredChatUnitTaken or currentChatWidget.UnitTaken == filteredChatUnitTaken)
+		and (not filteredChatUnitGiven or currentChatWidget.UnitGiven == filteredChatUnitGiven)
+	then
 		return
 	end
 
 	restoreChatFilter()
-	if not currentChatWidget or type(currentChatWidget.UnitTaken) ~= "function" then
+	if not currentChatWidget
+		or (type(currentChatWidget.UnitTaken) ~= "function" and type(currentChatWidget.UnitGiven) ~= "function")
+	then
 		return
 	end
 
 	chatWidget = currentChatWidget
-	originalChatUnitTaken = chatWidget.UnitTaken
-	local original = originalChatUnitTaken
+	if type(chatWidget.UnitTaken) == "function" then
+		originalChatUnitTaken = chatWidget.UnitTaken
+		local originalTaken = originalChatUnitTaken
 
-	filteredChatUnitTaken = function(self, unitID, unitDefID, oldTeamID, newTeamID)
-		local expires = suppressedUnitIDs[unitID]
-		if expires then
-			suppressedUnitIDs[unitID] = nil
-			if Spring.GetGameFrame() <= expires then
-				return
+		filteredChatUnitTaken = function(self, unitID, unitDefID, oldTeamID, newTeamID)
+			local expires = suppressedUnitIDs[unitID]
+			if expires then
+				suppressedUnitIDs[unitID] = nil
+				if Spring.GetGameFrame() <= expires then
+					return
+				end
 			end
+
+			return originalTaken(self, unitID, unitDefID, oldTeamID, newTeamID)
 		end
 
-		return original(self, unitID, unitDefID, oldTeamID, newTeamID)
+		chatWidget.UnitTaken = filteredChatUnitTaken
 	end
 
-	chatWidget.UnitTaken = filteredChatUnitTaken
+	if type(chatWidget.UnitGiven) == "function" then
+		originalChatUnitGiven = chatWidget.UnitGiven
+		local originalGiven = originalChatUnitGiven
+
+		filteredChatUnitGiven = function(self, unitID, unitDefID, newTeamID, oldTeamID)
+			if isExpectedIncomingUnit(unitDefID, oldTeamID, newTeamID) then
+				return
+			end
+
+			return originalGiven(self, unitID, unitDefID, newTeamID, oldTeamID)
+		end
+
+		chatWidget.UnitGiven = filteredChatUnitGiven
+	end
 end
 
 local function processShareQueue()
