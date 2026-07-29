@@ -85,6 +85,9 @@ local originalChatUnitTaken
 local filteredChatUnitTaken
 local originalChatUnitGiven
 local filteredChatUnitGiven
+local shareTrackerWidget
+local originalShareTrackerUnitTaken
+local filteredShareTrackerUnitTaken
 
 local function drawBox(x1, y1, x2, y2, color)
 	gl.Color(color[1], color[2], color[3], color[4])
@@ -218,6 +221,15 @@ local function isExpectedIncomingUnit(unitDefID, oldTeamID, newTeamID)
 	return whitelist and unitDef and whitelist[unitDef.name] == true
 end
 
+local function shouldSuppressUnitMessage(unitID, unitDefID, oldTeamID, newTeamID)
+	if isExpectedIncomingUnit(unitDefID, oldTeamID, newTeamID) then
+		return true
+	end
+
+	local expires = suppressedUnitIDs[unitID]
+	return expires ~= nil and Spring.GetGameFrame() <= expires
+end
+
 local function restoreChatFilter()
 	if chatWidget and originalChatUnitTaken and chatWidget.UnitTaken == filteredChatUnitTaken then
 		chatWidget.UnitTaken = originalChatUnitTaken
@@ -232,6 +244,19 @@ local function restoreChatFilter()
 	filteredChatUnitTaken = nil
 	originalChatUnitGiven = nil
 	filteredChatUnitGiven = nil
+end
+
+local function restoreShareTrackerFilter()
+	if shareTrackerWidget
+		and originalShareTrackerUnitTaken
+		and shareTrackerWidget.UnitTaken == filteredShareTrackerUnitTaken
+	then
+		shareTrackerWidget.UnitTaken = originalShareTrackerUnitTaken
+	end
+
+	shareTrackerWidget = nil
+	originalShareTrackerUnitTaken = nil
+	filteredShareTrackerUnitTaken = nil
 end
 
 local function installChatFilter()
@@ -263,12 +288,8 @@ local function installChatFilter()
 		local originalTaken = originalChatUnitTaken
 
 		filteredChatUnitTaken = function(self, unitID, unitDefID, oldTeamID, newTeamID)
-			local expires = suppressedUnitIDs[unitID]
-			if expires then
-				suppressedUnitIDs[unitID] = nil
-				if Spring.GetGameFrame() <= expires then
-					return
-				end
+			if shouldSuppressUnitMessage(unitID, unitDefID, oldTeamID, newTeamID) then
+				return
 			end
 
 			return originalTaken(self, unitID, unitDefID, oldTeamID, newTeamID)
@@ -293,12 +314,50 @@ local function installChatFilter()
 	end
 end
 
+local function installShareTrackerFilter()
+	if not widgetHandler or type(widgetHandler.FindWidget) ~= "function" then
+		return
+	end
+
+	local currentShareTrackerWidget = widgetHandler:FindWidget("Share Tracker")
+	if currentShareTrackerWidget == shareTrackerWidget
+		and filteredShareTrackerUnitTaken
+		and currentShareTrackerWidget.UnitTaken == filteredShareTrackerUnitTaken
+	then
+		return
+	end
+
+	restoreShareTrackerFilter()
+	if not currentShareTrackerWidget or type(currentShareTrackerWidget.UnitTaken) ~= "function" then
+		return
+	end
+
+	shareTrackerWidget = currentShareTrackerWidget
+	originalShareTrackerUnitTaken = shareTrackerWidget.UnitTaken
+	local originalTaken = originalShareTrackerUnitTaken
+
+	filteredShareTrackerUnitTaken = function(self, unitID, unitDefID, oldTeamID, newTeamID)
+		if shouldSuppressUnitMessage(unitID, unitDefID, oldTeamID, newTeamID) then
+			return
+		end
+
+		return originalTaken(self, unitID, unitDefID, oldTeamID, newTeamID)
+	end
+
+	shareTrackerWidget.UnitTaken = filteredShareTrackerUnitTaken
+end
+
+local function installMessageFilters()
+	installChatFilter()
+	installShareTrackerFilter()
+end
+
 local function processShareQueue()
 	if #shareQueue == 0 then
 		return
 	end
 
-	installChatFilter()
+	installMessageFilters()
 	local queued = shareQueue
 	shareQueue = {}
 	local teammate = getTeammate()
@@ -336,7 +395,7 @@ function widget:Initialize()
 	end
 
 	updateTeam()
-	installChatFilter()
+	installMessageFilters()
 end
 
 function widget:PlayerChanged()
@@ -350,6 +409,7 @@ end
 
 function widget:Shutdown()
 	restoreChatFilter()
+	restoreShareTrackerFilter()
 end
 
 function widget:DrawScreen()
@@ -418,7 +478,7 @@ end
 
 function widget:GameFrame(frame)
 	if frame % 30 == 0 then
-		installChatFilter()
+		installMessageFilters()
 		for unitID, expires in pairs(suppressedUnitIDs) do
 			if frame > expires then
 				suppressedUnitIDs[unitID] = nil
